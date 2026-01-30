@@ -33,7 +33,6 @@ parse_dates = [
 ]
 
 
-
 @click.option('--pg-user', default='root', help='PostgreSQL user')
 @click.option('--pg-pass', default='root', help='PostgreSQL password')
 @click.option('--pg-host', default='localhost', help='PostgreSQL host')
@@ -42,30 +41,48 @@ parse_dates = [
 @click.option('--year', type=int, default=2021, help='Year')
 @click.option('--month', type=int, default=1, help='Month')
 @click.option('--target-table', default='yellow_taxi_data', help='Target table')
+@click.option('--use_yellow', is_flag=True, help='Use yellow taxi data')
 @click.option('--chunksize', type=int, default=100000, help='Chunk size')
 @click.command()
-def run(pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, target_table, chunksize):
-    prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow'
-    url = f"{prefix}/yellow_tripdata_{year}-{month:02d}.csv.gz"
+def run(pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, target_table, use_yellow, chunksize):
+    if (use_yellow):
+        prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow'
+        url = f"{prefix}/yellow_tripdata_{year}-{month:02d}.csv.gz"
 
-    engine = create_engine(f'postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}')
+        df_iter = pd.read_csv(
+            url,
+            dtype=dtype,
+            parse_dates=parse_dates,
+            iterator=True,
+            chunksize=chunksize)
+    else:
+        prefix = 'https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata'
+        url = f"{prefix}_{year}-{month:02d}.parquet"
 
-    df_iter = pd.read_csv(
-        url,
-        dtype=dtype,
-        parse_dates=parse_dates,
-        iterator=True,
-        chunksize=chunksize)
+        df_iter = pd.read_parquet(
+            url,
+            engine='pyarrow',
+            chunksize=chunksize)
 
+    engine = create_engine(
+        f'postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}')
     first = True
     for df_chunk in tqdm(df_iter):
         if first:
             # create table
-            df_chunk.head(0).to_sql(name=target_table, con=engine, if_exists='replace')
+            df_chunk.head(0).to_sql(name=target_table,
+                                    con=engine, if_exists='replace')
+
+            # ingest zone lookup data
+            url = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/misc/taxi_zone_lookup.csv'
+            df_zone_lookup = pd.read_csv(url)
+            df_zone_lookup.to_sql(name='taxi_zone_lookup',
+                                  con=engine, if_exists='replace')
             first = False
 
         df_chunk.to_sql(name=target_table, con=engine, if_exists='append')
         print(len(df_chunk))
+
 
 if __name__ == '__main__':
     run()
